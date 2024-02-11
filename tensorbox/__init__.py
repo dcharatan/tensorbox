@@ -3,12 +3,39 @@ from dataclasses import dataclass, fields
 from typing import Annotated, Any, TypeVar
 
 import jaxtyping
-from jaxtyping import AbstractArray
+from jaxtyping import AbstractArray, Bool, Int64
+from torch import Tensor
 
 T = TypeVar("T", bound=type)
 
 
+RESTRICTED_NAMES = ("shape", "unbind")
+
+
+def is_tensorbox(cls: type) -> bool:
+    return getattr(cls, "__tensorbox__", False)
+
+
+def _ensure_compatibility(cls: T) -> None:
+    for name, annotation in cls.__annotations__.items():
+        # Ensure that the class doesn't have any of the forbidden names defined.
+        if name in RESTRICTED_NAMES:
+            raise AttributeError(
+                f'A @tensorbox class cannot have an instance variable named "{name}"'
+            )
+
+        # Ensure that the class only has jaxtyping annotations defined.
+        if not (issubclass(annotation, AbstractArray) or is_tensorbox(annotation)):
+            raise AttributeError(
+                f'The instance variable "{name}" is not a jaxtyping annotation. A '
+                "@tensorbox class's instance variables must either be "
+                "jaxtyping-annotated tensors or other @tensorbox classes."
+            )
+
+
 def _tensorbox(cls: T) -> T:
+    _ensure_compatibility(cls)
+
     cls = dataclass(cls)
 
     def rewrite_annotations(batch_shape: str) -> Annotated[T, Any]:
@@ -33,7 +60,7 @@ def _tensorbox(cls: T) -> T:
                     field.type = jaxtype[field.type.array_type, combined_shape]
 
                 # Recurse on @tensorbox fields.
-                if getattr(field.type, "__tensorbox__", False):
+                if is_tensorbox(field.type):
                     queue.append(field.type)
 
         return cls
