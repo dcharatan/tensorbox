@@ -1,34 +1,49 @@
 import re
 from copy import deepcopy
 from dataclasses import dataclass, fields, make_dataclass
-from typing import Annotated, Any, TypeVar, Protocol, runtime_checkable
-
+from typing import Annotated, Any, TypeVar, Protocol, runtime_checkable, Generator
+from inspect import get_annotations
 import jaxtyping
 from jaxtyping import AbstractArray
-from typing import Callable
+from typing import Callable, TypeGuard
 
 T = TypeVar("T", bound=type)
 
-TENSORBOX_CLASS_VARIABLES = ("__tensorbox__",)
+TENSORBOX_CLASS_VARIABLES = ("__tensorbox__", "__tensorbox_annotations__")
+
+
+@runtime_checkable
+class Specialization(Protocol):
+    __tensorbox_annotations__: dict[str, Any]
 
 
 def is_tensorbox(cls: type) -> bool:
-    return getattr(cls, "__tensorbox__", False) in ("base", "specialized")
+    """Check if a class is a tensorbox."""
+    return getattr(cls, "__tensorbox__", False)
+
+
+def is_tensorbox_specialization(cls: type) -> TypeGuard[Specialization]:
+    """Check if a class is a tensorbox specialization."""
+    return getattr(cls, "__tensorbox_annotations__", None) is not None
 
 
 def _ensure_compatibility(cls: T) -> None:
     # TODO: Ensure that there are no defaults.
     # TODO: Ensure that jaxtyping annotations don't have "batch" anywhere.
 
-    for name, annotation in cls.__annotations__.items():
+    for name, annotation in get_annotations(cls).items():
         # Ensure that the class doesn't have any of the forbidden names defined.
         if name in TENSORBOX_CLASS_VARIABLES:
             raise AttributeError(
                 f'A @tensorbox class cannot have an instance variable named "{name}"'
             )
 
-        # Ensure that the class only has jaxtyping annotations defined.
-        if not (issubclass(annotation, AbstractArray) or is_tensorbox(annotation)):
+        # Ensure that the class only has jaxtyping or tensorbox annotations defined.
+        if not (
+            issubclass(annotation, AbstractArray)
+            or is_tensorbox(annotation)
+            or is_tensorbox_specialization(annotation)
+        ):
             raise AttributeError(
                 f'The instance variable "{name}" is not a jaxtyping annotation or a '
                 "@tensorbox class. A  @tensorbox class's instance variables must "
@@ -41,41 +56,54 @@ def _specialize(cls: type, leaf_fn: Callable[[type], type]) -> type:
     (*batch) has been replaced with the specified batch_shape.
     """
 
-    # Recurse on tensorbox children.
-    specialized_fields = {
-        f.name: (
-            _specialize(f.type, leaf_fn) if is_tensorbox(f.type) else leaf_fn(f.type)
-        )
-        for f in fields(cls)
-    }
+    annotations = {}
 
-    # Derive the typing.Protocol, then mark it as being a tensorbox specialization.
-    specialized = type(
-        f"Specialized{cls.__name__}",
-        (Protocol,),
-        specialized_fields,
+    # Handle leaves (jaxtyping annotations).
+    if issubclass(cls, AbstractArray):
+        return leaf_fn(cls)
+
+    # Recurse on tensorbox classes.
+    elif is_tensorbox(cls):
+        for field in fields(cls):
+            annotations[field.name] = _specialize(field.type, leaf_fn)
+
+    # Recurse on tensorbox specializations.
+    else:
+        assert is_tensorbox_specialization(cls)
+        for name, annotation in cls.__tensorbox_annotations__.items():
+            annotations[name] = _specialize(annotation, leaf_fn)
+
+    # Generate the specialization type (a subclass of Specialization, which is itself a
+    # subclass of typing.Protocol).
+    specialization = type(
+        f"{cls.__name__}Specialization",
+        (Specialization,),
+        annotations,
     )
-    specialized.__tensorbox__ = "specialized"
 
-    # Allow the type checker to type-check the specialization at runtime.
-    return runtime_checkable(specialized)
+    # Mark the specialization with the annotations. This allows the specialization's
+    # annotations to be traversed later.
+    specialization.__tensorbox_annotations__ = annotations
+
+    return specialization
 
 
 def _transform_tensorbox(cls: type, leaf_fn: Callable[[type], type]) -> type:
-    """Modify the"""
-
-    """Create a transformed copy of the @tensorbox class in which the leaves (jaxtyping
-    annotations) have been transformed according to leaf_fn. The leaf_fn should create
-    new jaxtyping annotations rather than modifying the existing ones.
+    """Transform all of the tensorbox's jaxtyping annotations (leaf nodes) according to
+    leaf_fn.
     """
 
-    for field in fields(cls):
-        if is_tensorbox(field.type):
-            _transform_tensorbox(field.type, leaf_fn)
-        else:
-            field.type = leaf_fn(field.type)
-
-    return cls
+    if issubclass(cls, AbstractArray):
+        return leaf_fn(cls)
+    elif is_tensorbox(cls):
+        for field in fields(cls):
+            field.type = _transform_tensorbox(field.type, leaf_fn)
+        return cls
+    else:
+        assert is_tensorbox_specialization(cls)
+        for key, value in cls.__tensorbox_annotations__.items():
+            cls.__tensorbox_annotations__[key] = _transform_tensorbox(value, leaf_fn)
+        return cls
 
 
 def _transform_dim_str(fn: Callable[[str], str]) -> Callable[[type], type]:
@@ -110,6 +138,9 @@ def _tensorbox(cls: T) -> T:
     # Tensorbox uses many of the mechanisms dataclass provides.
     cls = dataclass(cls)
 
+    # Add a __tensorbox__ attribute so that we can detect @tensorbox classes.
+    cls.__tensorbox__ = True
+
     # Re-write all of the jaxtyping annotations to include a *batch dimension. This is
     # because jaxtyping annotations used with tensorbox are assumed to be for scalar
     # (non-batched) types.
@@ -123,9 +154,6 @@ def _tensorbox(cls: T) -> T:
     # This is called when the a tensorbox class is used as an annotation. It re-writes
     # all of the tensorbox's jaxtyping annotations to include the desired batch
     cls.__class_getitem__ = specialize
-
-    # Add a __tensorbox__ attribute so that we can detect @tensorbox classes.
-    cls.__tensorbox__ = "base"
 
     return cls
 
