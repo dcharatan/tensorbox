@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass, fields
 from inspect import get_annotations
-from typing import Callable, Protocol, TypeVar, runtime_checkable
+from typing import Callable, Protocol, TypeVar, dataclass_transform, runtime_checkable
 
 import jaxtyping
 from jaxtyping import AbstractArray
@@ -120,7 +120,8 @@ def _transform_dim_str(fn: Callable[[str], str]) -> Callable[[type], type]:
     return leaf_fn
 
 
-def _tensorbox(cls: T) -> T:
+@dataclass_transform()
+def tensorbox(cls: T) -> T:
     # Ensure that the provided class is compatible with tensorbox, mainly in order to
     # emit helpful errors when the user uses tensorbox incorrectly.
     _ensure_compatibility(cls)
@@ -146,13 +147,3 @@ def _tensorbox(cls: T) -> T:
     cls.__class_getitem__ = specialize
 
     return cls
-
-
-# This makes VS Code IntelliSense interpret @tensorbox the same way as @dataclass, which
-# makes type hints work correctly.
-TYPE_CHECKING = False
-
-if TYPE_CHECKING:
-    from dataclasses import dataclass as tensorbox
-else:
-    tensorbox = _tensorbox
