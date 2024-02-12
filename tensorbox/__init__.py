@@ -1,30 +1,19 @@
 import re
-from copy import deepcopy
-from dataclasses import dataclass, fields, make_dataclass
-from typing import Annotated, Any, TypeVar, Protocol, runtime_checkable, Generator
+from dataclasses import dataclass, fields
 from inspect import get_annotations
+from typing import Callable, Protocol, TypeVar, runtime_checkable
+
 import jaxtyping
 from jaxtyping import AbstractArray
-from typing import Callable, TypeGuard
 
 T = TypeVar("T", bound=type)
 
-TENSORBOX_CLASS_VARIABLES = ("__tensorbox__", "__tensorbox_annotations__")
-
-
-@runtime_checkable
-class Specialization(Protocol):
-    __tensorbox_annotations__: dict[str, Any]
+TENSORBOX_CLASS_VARIABLES = ("__tensorbox__",)
 
 
 def is_tensorbox(cls: type) -> bool:
     """Check if a class is a tensorbox."""
     return getattr(cls, "__tensorbox__", False)
-
-
-def is_tensorbox_specialization(cls: type) -> TypeGuard[Specialization]:
-    """Check if a class is a tensorbox specialization."""
-    return getattr(cls, "__tensorbox_annotations__", None) is not None
 
 
 def _ensure_compatibility(cls: T) -> None:
@@ -38,11 +27,13 @@ def _ensure_compatibility(cls: T) -> None:
                 f'A @tensorbox class cannot have an instance variable named "{name}"'
             )
 
-        # Ensure that the class only has jaxtyping or tensorbox annotations defined.
+        # Ensure that the class only has jaxtyping or tensorbox annotations defined. One
+        # could intentionally fool this using a protocol that isn't a tensorbox
+        # specialization, but that probably doesn't matter.
         if not (
             issubclass(annotation, AbstractArray)
             or is_tensorbox(annotation)
-            or is_tensorbox_specialization(annotation)
+            or issubclass(annotation, Protocol)
         ):
             raise AttributeError(
                 f'The instance variable "{name}" is not a jaxtyping annotation or a '
@@ -69,23 +60,23 @@ def _specialize(cls: type, leaf_fn: Callable[[type], type]) -> type:
 
     # Recurse on tensorbox specializations.
     else:
-        assert is_tensorbox_specialization(cls)
-        for name, annotation in cls.__tensorbox_annotations__.items():
+        for name, annotation in cls.__annotations__.items():
             annotations[name] = _specialize(annotation, leaf_fn)
 
-    # Generate the specialization type (a subclass of Specialization, which is itself a
-    # subclass of typing.Protocol).
+    # Generate the specialization type as a subclass of typing.Protocol. This allows it
+    # to be used for structural typing (duck typing).
     specialization = type(
         f"{cls.__name__}Specialization",
-        (Specialization,),
+        (Protocol,),
         annotations,
     )
 
     # Mark the specialization with the annotations. This allows the specialization's
     # annotations to be traversed later.
-    specialization.__tensorbox_annotations__ = annotations
+    specialization.__annotations__ = annotations
 
-    return specialization
+    # Type checking breaks without this.
+    return runtime_checkable(specialization)
 
 
 def _transform_tensorbox(cls: type, leaf_fn: Callable[[type], type]) -> type:
@@ -100,9 +91,8 @@ def _transform_tensorbox(cls: type, leaf_fn: Callable[[type], type]) -> type:
             field.type = _transform_tensorbox(field.type, leaf_fn)
         return cls
     else:
-        assert is_tensorbox_specialization(cls)
-        for key, value in cls.__tensorbox_annotations__.items():
-            cls.__tensorbox_annotations__[key] = _transform_tensorbox(value, leaf_fn)
+        for key, value in cls.__annotations__.items():
+            cls.__annotations__[key] = _transform_tensorbox(value, leaf_fn)
         return cls
 
 
