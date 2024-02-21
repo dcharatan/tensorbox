@@ -1,14 +1,34 @@
+import inspect
 import re
 from dataclasses import dataclass, fields
 from inspect import get_annotations
-from typing import Callable, Protocol, TypeVar, dataclass_transform, runtime_checkable
+from typing import Any, Callable, TypeVar, dataclass_transform
 
 import jaxtyping
+from beartype.door import is_bearable
 from jaxtyping import AbstractArray
 
 T = TypeVar("T", bound=type)
 
 TENSORBOX_CLASS_VARIABLES = ("__tensorbox__",)
+
+
+class SpecializationMeta(type):
+    def __instancecheck__(self, instance: Any) -> bool:
+        for key, value in inspect.get_annotations(self).items():
+            # Check if the key is missing.
+            if not hasattr(instance, key):
+                return False
+
+            # Check if the type is wrong.
+            if not is_bearable(getattr(instance, key), value):
+                return False
+
+        return True
+
+
+class Specialization(metaclass=SpecializationMeta):
+    pass
 
 
 def is_tensorbox(cls: type) -> bool:
@@ -33,7 +53,7 @@ def _ensure_compatibility(cls: T) -> None:
         if not (
             issubclass(annotation, AbstractArray)
             or is_tensorbox(annotation)
-            or issubclass(annotation, Protocol)
+            or issubclass(annotation, Specialization)
         ):
             raise AttributeError(
                 f'The instance variable "{name}" is not a jaxtyping annotation or a '
@@ -63,20 +83,18 @@ def _specialize(cls: type, leaf_fn: Callable[[type], type]) -> type:
         for name, annotation in cls.__annotations__.items():
             annotations[name] = _specialize(annotation, leaf_fn)
 
-    # Generate the specialization type as a subclass of typing.Protocol. This allows it
-    # to be used for structural typing (duck typing).
+    # Generate the specialization type.
     specialization = type(
         f"{cls.__name__}Specialization",
-        (Protocol,),
+        (Specialization,),
         annotations,
     )
 
-    # Mark the specialization with the annotations. This allows the specialization's
-    # annotations to be traversed later.
+    # Add type annotations to the specialization. These are used to traverse the
+    # specialization and carry out __isinstance__ checks.
     specialization.__annotations__ = annotations
 
-    # Type checking breaks without this.
-    return runtime_checkable(specialization)
+    return specialization
 
 
 def _transform_tensorbox(cls: type, leaf_fn: Callable[[type], type]) -> type:
