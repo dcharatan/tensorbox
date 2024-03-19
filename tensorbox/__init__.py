@@ -7,10 +7,11 @@ from typing import Any, Callable, TypeVar, dataclass_transform
 import jaxtyping
 from beartype.door import is_bearable
 from jaxtyping import AbstractArray
+from jaxtyping._array_types import _anonymous_variadic_dim, _NamedVariadicDim
 
 T = TypeVar("T", bound=type)
 
-TENSORBOX_CLASS_VARIABLES = ("__tensorbox__",)
+TENSORBOX_CLASS_VARIABLE = "__tensorbox__"
 
 
 class SpecializationMeta(type):
@@ -33,23 +34,20 @@ class Specialization(metaclass=SpecializationMeta):
 
 def is_tensorbox(cls: type) -> bool:
     """Check if a class is a tensorbox."""
-    return getattr(cls, "__tensorbox__", False)
+    return getattr(cls, TENSORBOX_CLASS_VARIABLE, False)
 
 
 def _ensure_compatibility(cls: T) -> None:
     # TODO: Ensure that there are no defaults.
-    # TODO: Ensure that jaxtyping annotations don't have "batch" anywhere.
 
     for name, annotation in get_annotations(cls).items():
         # Ensure that the class doesn't have any of the forbidden names defined.
-        if name in TENSORBOX_CLASS_VARIABLES:
+        if name == TENSORBOX_CLASS_VARIABLE:
             raise AttributeError(
                 f'A @tensorbox class cannot have an instance variable named "{name}"'
             )
 
-        # Ensure that the class only has jaxtyping or tensorbox annotations defined. One
-        # could intentionally fool this using a protocol that isn't a tensorbox
-        # specialization, but that probably doesn't matter.
+        # Ensure that the class only has jaxtyping or tensorbox annotations defined.
         if not (
             issubclass(annotation, AbstractArray)
             or is_tensorbox(annotation)
@@ -61,10 +59,18 @@ def _ensure_compatibility(cls: T) -> None:
                 "either be jaxtyping-annotated tensors or other @tensorbox classes."
             )
 
+        # Ensure that any array annotations have fixed shapes.
+        if issubclass(annotation, AbstractArray):
+            for dim in annotation.dims:
+                if dim is _anonymous_variadic_dim or isinstance(dim, _NamedVariadicDim):
+                    raise Exception(
+                        "Variadic annotations are not allowed in @tensorbox classes."
+                    )
+
 
 def _specialize(cls: type, leaf_fn: Callable[[type], type]) -> type:
-    """Derive a typing.Protocol from the tensorbox in which the arbitrary batch shape
-    (*batch) has been replaced with the specified batch_shape.
+    """Derive a class from the tensorbox in which the arbitrary batch shape (*batch) has
+    been replaced with the specified batch_shape.
     """
 
     annotations = {}
@@ -147,8 +153,8 @@ def tensorbox(cls: T) -> T:
     # Tensorbox uses many of the mechanisms dataclass provides.
     cls = dataclass(cls)
 
-    # Add a __tensorbox__ attribute so that we can detect @tensorbox classes.
-    cls.__tensorbox__ = True
+    # Add an attribute so that we can detect tensorbox classes.
+    setattr(cls, TENSORBOX_CLASS_VARIABLE, True)
 
     # Re-write all of the jaxtyping annotations to include a *batch dimension. This is
     # because jaxtyping annotations used with tensorbox are assumed to be for scalar
@@ -163,5 +169,18 @@ def tensorbox(cls: T) -> T:
     # This is called when the a tensorbox class is used as an annotation. It re-writes
     # all of the tensorbox's jaxtyping annotations to include the desired batch
     cls.__class_getitem__ = specialize
+
+    def get_shape(self) -> tuple[int, ...]:
+        (name, annotation), *_ = self.__class__.__annotations__.items()
+
+        if not issubclass(annotation, AbstractArray):
+            raise ValueError(
+                "@tensorbox class contains annotation that's not a jaxtyping array."
+            )
+
+        # Deduce the batch shape by chopping off the fixed shape in the annotation.
+        return getattr(self, name).shape[: -len(annotation.dims)]
+
+    cls.shape = property(get_shape)
 
     return cls
