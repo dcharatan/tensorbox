@@ -216,15 +216,16 @@ def tensorbox(cls: T) -> T:
     # (non-batched) types.
     _transform_tensorbox(cls, _transform_dim_str(lambda x: f"*batch {x}"))
 
-    # This is called when the a tensorbox class is used as an annotation. It re-writes
-    # all of the tensorbox's jaxtyping annotations to include the desired batch
     def specialize(batch_shape: str):
+        """This is called when a tensorbox class is used as an annotation. It re-writes
+        all of the tensorbox's jaxtyping annotations to include the desired batch size.
+        """
         return _specialize(
             cls, _transform_dim_str(lambda x: x.replace("*batch", batch_shape))
         )
 
-    # This returns only the batch (common) shape.
     def get_shape(self) -> tuple[int, ...]:
+        """Return only the batch (common) shape."""
         assert cls == self.__class__
         (name, annotation), *_ = cls.__annotations__.items()
 
@@ -243,6 +244,9 @@ def tensorbox(cls: T) -> T:
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ):
+        """Allow tensorbox classes to be used with PyTorch functions as if they were
+        PyTorch tensors.
+        """
         handler = TORCH_FUNCTIONS.get(func, None)
         if handler is None:
             raise Exception(
