@@ -5,6 +5,7 @@ from inspect import get_annotations
 from typing import Any, Callable, TypeVar, dataclass_transform
 
 import jaxtyping
+import torch
 from beartype.door import is_bearable
 from jaxtyping import AbstractArray
 from jaxtyping._array_types import _anonymous_variadic_dim, _NamedVariadicDim
@@ -12,6 +13,65 @@ from jaxtyping._array_types import _anonymous_variadic_dim, _NamedVariadicDim
 T = TypeVar("T", bound=type)
 
 TENSORBOX_CLASS_VARIABLE = "__tensorbox__"
+
+
+def is_tensorbox(cls: type) -> bool:
+    """Check if a class is a tensorbox."""
+    return getattr(cls, TENSORBOX_CLASS_VARIABLE, False)
+
+
+# Since @tensorbox is dataclass-like, there's no actual tensorbox type. This is just a
+# suggestively named Any.
+TensorBox = Any
+
+
+def convert_dim(x: TensorBox, dim: int, extra: int = 0) -> int:
+    """Convert negative dims to be relative to the tensorbox's batch shape. The "extra"
+    parameter is used for operations like torch.stack where the dim can be one larger
+    than usual because it refers to slots around dims, not dims themselves.
+    """
+    maximum = len(x.shape) + extra
+    absolute = dim if dim >= 0 else maximum + dim
+    if not (0 <= absolute < maximum):
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-maximum}, "
+            f"{maximum - 1}], but got {dim})"
+        )
+    return absolute
+
+
+def combine_tensorbox(fn: Callable, extra: int) -> Callable:
+    def wrapped(
+        tensors: list[TensorBox] | tuple[TensorBox],
+        dim: int = 0,
+        out: Any = None,
+    ) -> TensorBox:
+        if out is not None:
+            raise Exception('tensorbox does not support the "out" parameter')
+
+        # It should be impossible to have no tensors, since then __torch_function__
+        # wouldn't be called.
+        assert len(tensors) > 0
+
+        # Ensure that the model is actually a tensorbox.
+        model = tensors[0]
+        assert is_tensorbox(model)
+
+        # Combine each field separately.
+        dim = convert_dim(model, dim, extra=extra)
+        items = {
+            name: fn([getattr(x, name) for x in tensors], dim=dim)
+            for name in model.__annotations__.keys()
+        }
+        return model.__class__(**items)
+
+    return wrapped
+
+
+TORCH_FUNCTIONS = {
+    torch.cat: combine_tensorbox(torch.cat, 0),
+    torch.stack: combine_tensorbox(torch.stack, 1),
+}
 
 
 class SpecializationMeta(type):
@@ -30,11 +90,6 @@ class SpecializationMeta(type):
 
 class Specialization(metaclass=SpecializationMeta):
     pass
-
-
-def is_tensorbox(cls: type) -> bool:
-    """Check if a class is a tensorbox."""
-    return getattr(cls, TENSORBOX_CLASS_VARIABLE, False)
 
 
 def _ensure_compatibility(cls: T) -> None:
@@ -181,8 +236,23 @@ def tensorbox(cls: T) -> T:
         # Deduce the batch shape by chopping off the fixed shape in the annotation.
         return getattr(self, name).shape[: -len(annotation.dims)]
 
+    def __torch_function__(
+        cls,
+        func: Callable,
+        types: tuple[type, ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ):
+        handler = TORCH_FUNCTIONS.get(func, None)
+        if handler is None:
+            raise Exception(
+                f"tensorbox does not support the PyTorch {func.__name__} function."
+            )
+        return TORCH_FUNCTIONS[func](*args, **kwargs)
+
     # These are the methods @tensorbox adds to the class.
     cls.__class_getitem__ = specialize
+    cls.__torch_function__ = classmethod(__torch_function__)
     cls.shape = property(get_shape)
 
     return cls
