@@ -161,17 +161,17 @@ def tensorbox(cls: T) -> T:
     # (non-batched) types.
     _transform_tensorbox(cls, _transform_dim_str(lambda x: f"*batch {x}"))
 
+    # This is called when the a tensorbox class is used as an annotation. It re-writes
+    # all of the tensorbox's jaxtyping annotations to include the desired batch
     def specialize(batch_shape: str):
         return _specialize(
             cls, _transform_dim_str(lambda x: x.replace("*batch", batch_shape))
         )
 
-    # This is called when the a tensorbox class is used as an annotation. It re-writes
-    # all of the tensorbox's jaxtyping annotations to include the desired batch
-    cls.__class_getitem__ = specialize
-
+    # This returns only the batch (common) shape.
     def get_shape(self) -> tuple[int, ...]:
-        (name, annotation), *_ = self.__class__.__annotations__.items()
+        assert cls == self.__class__
+        (name, annotation), *_ = cls.__annotations__.items()
 
         if not issubclass(annotation, AbstractArray):
             raise ValueError(
@@ -181,6 +181,8 @@ def tensorbox(cls: T) -> T:
         # Deduce the batch shape by chopping off the fixed shape in the annotation.
         return getattr(self, name).shape[: -len(annotation.dims)]
 
+    # These are the methods @tensorbox adds to the class.
+    cls.__class_getitem__ = specialize
     cls.shape = property(get_shape)
 
     return cls
