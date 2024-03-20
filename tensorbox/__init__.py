@@ -256,13 +256,29 @@ def tensorbox(cls: T) -> T:
         assert cls == self.__class__
         (name, annotation), *_ = cls.__annotations__.items()
 
-        if not issubclass(annotation, AbstractArray):
-            raise ValueError(
-                "@tensorbox class contains annotation that's not a jaxtyping array."
-            )
+        if issubclass(annotation, AbstractArray):
+            # Deduce the batch shape by chopping off the fixed shape in the annotation.
+            if len(annotation.dims) == 0:
+                # This special case is necessary because -0 is 0, which doesn't index
+                # from the right.
+                return getattr(self, name).shape
+            else:
+                return getattr(self, name).shape[: -len(annotation.dims)]
 
-        # Deduce the batch shape by chopping off the fixed shape in the annotation.
-        return getattr(self, name).shape[: -len(annotation.dims)]
+        if issubclass(annotation, Specialization):
+            # Traverse nested specializations.
+            value = getattr(self, name)
+            while issubclass(annotation, Specialization):
+                name, annotation = next(iter(annotation.__annotations__.items()))
+                value = getattr(value, name)
+
+            # The final nested value's shape will be the following:
+            # (*batch, *(spec. 1 shape), ..., *(spec. n shape), *(scalar shape))
+            # The specialization and scalar shapes are non-variadic, so we can simply
+            # chop them off to get the batch shape.
+            return value.shape[: 1 - len(annotation.dims)]
+
+        raise AttributeError(f'@tensorbox class contains invalid annotation "{name}"')
 
     def __torch_function__(
         cls,
