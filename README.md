@@ -77,9 +77,10 @@ def fn(tree: Tree["*batch"]):
 
 Note that `dim` arguments are always specified relative to the `@tensorbox` class's batch shape.
 
-## Advantages Over TensorDict
+## Comparison with TensorDict
 
-Compared to TensorDict, `tensorbox` has the following advantages:
+`tensorbox` is very similar to [TensorDict](https://github.com/pytorch/tensordict), but has a few key differences:
 
 - It's compatible with `jaxtyping` annotations.
+- It's not as feature-complete.
 - When creating a tensorbox class instance, you don't have to specify the batch shape—it's automatically inferred.
