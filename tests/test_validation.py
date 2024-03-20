@@ -50,6 +50,18 @@ def test_default_argument():
             bad: Float[Tensor, "3 3"] = torch.zeros((3, 3), dtype=torch.float32)
 
 
+def test_lacking_specialization():
+    with pytest.raises(AttributeError):
+
+        @tensorbox
+        class A:
+            a: Float[Tensor, "3 3"]
+
+        @tensorbox
+        class B:
+            bad: A
+
+
 def test_valid_tensorbox():
     @tensorbox
     class ExampleA:

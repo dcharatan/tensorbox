@@ -3,3 +3,4 @@ torchvision
 torchaudio
 beartype
 jaxtyping
+pytest

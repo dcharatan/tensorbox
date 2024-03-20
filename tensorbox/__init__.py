@@ -107,10 +107,16 @@ def _ensure_compatibility(cls: T) -> None:
                 f'A @tensorbox class cannot have an instance variable named "{name}"'
             )
 
+        # Ensure that only specializations are used as annotations.
+        if is_tensorbox(annotation):
+            raise AttributeError(
+                f'The annotation "{name}" is a non-specialized tensorbox. Did you mean '
+                f'to use {name}[""]?'
+            )
+
         # Ensure that the class only has jaxtyping or tensorbox annotations defined.
         if not (
             issubclass(annotation, AbstractArray)
-            or is_tensorbox(annotation)
             or issubclass(annotation, Specialization)
         ):
             raise AttributeError(
