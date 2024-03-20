@@ -9,10 +9,17 @@ import torch
 from beartype.door import is_bearable
 from jaxtyping import AbstractArray
 from jaxtyping._array_types import _anonymous_variadic_dim, _NamedVariadicDim
+from torch import Tensor
 
 T = TypeVar("T", bound=type)
 
 TENSORBOX_CLASS_VARIABLE = "__tensorbox__"
+RESERVED_NAMES = (
+    TENSORBOX_CLASS_VARIABLE,
+    "__class_getitem__",
+    "__torch_function__",
+    "shape",
+)
 
 
 def is_tensorbox(cls: type) -> bool:
@@ -93,11 +100,9 @@ class Specialization(metaclass=SpecializationMeta):
 
 
 def _ensure_compatibility(cls: T) -> None:
-    # TODO: Ensure that there are no defaults.
-
     for name, annotation in get_annotations(cls).items():
         # Ensure that the class doesn't have any of the forbidden names defined.
-        if name == TENSORBOX_CLASS_VARIABLE:
+        if name in RESERVED_NAMES:
             raise AttributeError(
                 f'A @tensorbox class cannot have an instance variable named "{name}"'
             )
@@ -109,18 +114,34 @@ def _ensure_compatibility(cls: T) -> None:
             or issubclass(annotation, Specialization)
         ):
             raise AttributeError(
-                f'The instance variable "{name}" is not a jaxtyping annotation or a '
-                "@tensorbox class. A  @tensorbox class's instance variables must "
-                "either be jaxtyping-annotated tensors or other @tensorbox classes."
+                f'The annotation "{name}" is not a jaxtyping annotation or a '
+                "@tensorbox class. A @tensorbox class's instance variables must either "
+                "be jaxtyping-annotated Torch tensors or other @tensorbox classes."
             )
+
+        # Ensure that only Torch tensors are used.
+        if issubclass(annotation, AbstractArray):
+            if annotation.array_type != Tensor:
+                raise AttributeError(
+                    f"The annotation {name} is not a Torch tensor. A @tensorbox "
+                    "class's instance variables must either be jaxtyping-annotated "
+                    "Torch tensors or other @tensorbox classes."
+                )
 
         # Ensure that any array annotations have fixed shapes.
         if issubclass(annotation, AbstractArray):
             for dim in annotation.dims:
                 if dim is _anonymous_variadic_dim or isinstance(dim, _NamedVariadicDim):
-                    raise Exception(
+                    raise AttributeError(
                         "Variadic annotations are not allowed in @tensorbox classes."
                     )
+
+        # Ensure that no defaults are provided.
+        if hasattr(cls, name):
+            raise AttributeError(
+                f"The annotation for {name} has a default specified. @tensorbox "
+                "classes must not have defaults specified."
+            )
 
 
 def _specialize(cls: type, leaf_fn: Callable[[type], type]) -> type:
