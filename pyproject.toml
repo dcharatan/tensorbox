@@ -1,3 +1,37 @@
+[project]
+name = "tensorbox"
+version = "0.0.1"
+description = "Type annotations and runtime checking for dataclass-like containers of tensors."
+readme = "README.md"
+requires-python ="~=3.11"
+license = {file = "LICENSE"}
+authors = [
+  {name = "David Charatan", email = "charatan@mit.edu"},
+]
+keywords = ["pytorch", "neural-networks", "deep-learning", "typing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+urls = {repository = "https://github.com/dcharatan/tensorbox" }
+dependencies = ["numpy>=1.20.0", "jaxtyping>=0.2.28", "torch>=2.0.0", "beartype>=0.17.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["tensorbox/*"]
+
 [tool.ruff]
 # Enable Pyflakes `E` and `F` codes by default.
 select = ["E", "F", "I"]
