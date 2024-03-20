@@ -28,3 +28,58 @@ gaussians = Gaussians(
 def fn(g: Gaussians["batch_a batch_b"]):
     ...
 ```
+
+## Features
+
+### Shape Inference
+
+A `@tensorbox` class will automatically infer its batch shape:
+
+```python
+@tensorbox
+class Camera:
+    intrinsics: Float[Tensor, "3 3"]
+    extrinsics: Float[Tensor, "4 4"]
+
+cameras = Camera(
+    torch.zeros((512, 4, 3, 3), dtype=torch.float32),
+    torch.zeros((512, 4, 4, 4), dtype=torch.float32),
+)
+
+cameras.shape  # (512, 4)
+```
+
+### Nested Tensorboxes
+
+You can define and use nested `@tensorbox` classes as follows:
+
+```python
+@tensorbox
+class Leaf:
+    rgb: Float[Tensor, "3"]
+    scale: Float[Tensor, ""]
+
+@tensorbox
+class Tree:
+    pair: Leaf["2"]
+
+def fn(tree: Tree["*batch"]):
+    # tree.pair.rgb has shape (*batch, 2, 3)
+    ...
+```
+
+### Interaction with PyTorch
+
+`@tensorbox` classes can be used directly with the following `torch` functions:
+
+- `torch.cat`
+- `torch.stack`
+
+Note that `dim` arguments are always specified relative to the `@tensorbox` class's batch shape.
+
+## Advantages Over TensorDict
+
+Compared to TensorDict, `tensorbox` has the following advantages:
+
+- It's compatible with `jaxtyping` annotations.
+- When creating a tensorbox class instance, you don't have to specify the batch shape—it's automatically inferred.
